@@ -2,13 +2,22 @@ import torch
 import torch.nn as nn
 import numpy as np
 from tqdm import tqdm
-from vision.src.vision_datasets.common import maybe_dictionarize
-from vision.src.eval import eval_single_dataset
-from vision.src.modeling import ImageClassifier
-from vision.src.heads import get_classification_head
-from vision.src.utils import get_logits
+from avalanche.models import MultiHeadClassifier, TaskIncrementalClassifier
 import evaluate 
 
+
+def maybe_dictionarize(batch):
+    if isinstance(batch, dict):
+        return batch
+
+    if len(batch) == 2:
+        batch = {'images': batch[0], 'labels': batch[1]}
+    elif len(batch) == 3:
+        batch = {'images': batch[0], 'labels': batch[1], 'metadata': batch[2]}
+    else:
+        raise ValueError(f'Unexpected number of elements: {len(batch)}')
+
+    return batch
 
 class Localizer(nn.Module):
     def __init__(self, trainable_params, model, pretrained_model, finetuned_model, dataset_name, args, graft_args, model_type="roberta"):
@@ -25,7 +34,7 @@ class Localizer(nn.Module):
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu") 
         self.model.to(self.device)
         if self.model_type == "vit":
-            self.classifier_head = get_classification_head(self.args, dataset_name)
+            self.classifier_head = MultiHeadClassifier(input_size=self.model.output_size, n_classes_per_task=args.num_classes_per_task)
             self.classifier_head.to(self.device)
         self.pretrained_model.to("cpu")
         self.finetuned_model.to("cpu")
@@ -134,52 +143,6 @@ class Localizer(nn.Module):
         if return_mask:
             return binary_mask, n_graft_params / self.num_params
     
-
-    def evaluate_vision(self, dataloader, dataset_name):
-        classification_head = get_classification_head(self.args, dataset_name)
-        model = ImageClassifier(self.model, classification_head)
-
-        model.eval()
-
-        with torch.no_grad():
-            top1, correct, n = 0., 0., 0.
-            for i, data in enumerate(tqdm(dataloader)):
-                data = maybe_dictionarize(data)
-                x = data['images'].to(self.device)
-                y = data['labels'].to(self.device)
-
-                logits = get_logits(x, model)
-
-                pred = logits.argmax(dim=1, keepdim=True).to(self.device)
-
-                correct += pred.eq(y.view_as(pred)).sum().item()
-                
-                n += y.size(0)
-
-            top1 = correct / n
-
-        metrics = {'top1': top1}
-        print(f'Grafting on {dataset_name}. Accuracy: {100*top1:.2f}%')
-    
-        return metrics
-
-    def evaluate_nlp(self, dataloader, task_name, mode='dev'):
-        if task_name.lower() not in [ 'qqp', 'mrpc' ]: 
-            metric = evaluate.load("accuracy")
-        else:
-            metric = evaluate.load("f1")
-            
-        self.model.eval()
-        device = self.device
-        for batch in dataloader:
-            with torch.no_grad():
-                loss, outputs = self.model(input_ids=batch['input_ids'].to(device), attention_mask=batch['attention_mask'].to(device), mask_pos=batch["mask_pos"].to(device), labels=batch["labels"].to(device))
-
-            predictions = torch.argmax(outputs, dim=-1)
-            metric.add_batch(predictions=predictions, references=batch["labels"])
-            
-        return metric
-
 
     def train_graft(self, dataloader, dataset_name):
         
