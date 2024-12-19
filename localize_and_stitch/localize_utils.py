@@ -2,8 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from tqdm import tqdm
-from avalanche.models import MultiHeadClassifier, TaskIncrementalClassifier
-import evaluate 
+from avalanche.models import MultiHeadClassifier
 
 
 def maybe_dictionarize(batch):
@@ -33,9 +32,6 @@ class Localizer(nn.Module):
 
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu") 
         self.model.to(self.device)
-        if self.model_type == "vit":
-            self.classifier_head = MultiHeadClassifier(input_size=self.model.output_size, n_classes_per_task=args.num_classes_per_task)
-            self.classifier_head.to(self.device)
         self.pretrained_model.to("cpu")
         self.finetuned_model.to("cpu")
         self.model.eval()
@@ -163,11 +159,14 @@ class Localizer(nn.Module):
             # for i, data in enumerate(tqdm(dataloader)):
             for data in dataloader:
                 if self.model_type == 'vit':
-                    data = maybe_dictionarize(data)
-                    x = data['images'].to(self.device)
-                    y = data['labels'].to(self.device)
-                    features = self.model(x)
-                    outputs = self.classifier_head(features)
+
+                    # Unpack inputs and labels directly
+                    x, y, *_ = data
+                    x = x.to(self.device)
+                    y = torch.tensor(y, dtype=torch.int8).to(self.device)
+                    
+                    # Forward pass through the model
+                    outputs = self.model(x)
                     loss = loss_fct(outputs, y)
                 elif self.model_type == 'roberta':
                     loss, outputs = self.model(input_ids=data['input_ids'].to(device), attention_mask=data['attention_mask'].to(device), mask_pos=data["mask_pos"].to(device), labels=data["labels"].to(device))
@@ -198,18 +197,6 @@ class Localizer(nn.Module):
                     reg_term = self.graft_args.l1_strength * torch.where(p>0, derivative, -derivative)
                     p -= g * derivative - reg_term
                     # p -= g * sigmoid(p) * (1 - sigmoid(p)) + self.graft_args.l1_strength * sigmoid(p) * (1 - sigmoid(p))
-         
-            ######## Evaluation of current mask ###########
-            if (epoch+1) % 5 == 0 or epoch == self.graft_args.num_train_epochs - 1:
-                mask, proportion = self.interpolate_model(round_=True, return_mask=True)
-                if self.model_type == "vit":
-                    val = self.evaluate_vision(dataloader, dataset_name)
-                elif self.model_type == 'roberta':
-                    if dataset_name.lower() not in [ 'qqp', 'mrpc' ]: key = "accuracy"
-                    else: key = "f1"
-                    val  = self.evaluate_nlp(dataloader, dataset_name, mode='train').compute()[key]
-                print("Accuracy for the grafted model:", val)
-                self.reset_model()   
         
         mask, proportion = self.interpolate_model(round_=True, return_mask=True)
         self.reset_model()
