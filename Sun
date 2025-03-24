@@ -1,0 +1,89 @@
+# The data is in this form
+"""
+data = [
+    {
+        "T": 3, "TV": 5, "E": [2,4,6,8],
+        "Localize & Stitch": [0.9894, 0.9924, 0.988],
+        "Fine-Tune": [0.9881, 0.9863, 0.9891]
+    },
+]
+"""
+# Calculate Regret: Localize & Stitch average - Fine-Tune average
+
+regret_data = defaultdict(list)
+
+for entry in data:
+    T = entry["T"]
+    TV = entry["TV"]
+    E = entry["E"]
+    avg_localize = np.mean(entry["Localize & Stitch"])
+    avg_finetune = np.mean(entry["Fine-Tune"])
+    regret = avg_localize - avg_finetune
+    
+    # Group as needed
+    regret_data["T"].append((T, regret))
+    regret_data["TV"].append((TV, regret))
+    
+    # Group for three cases of E
+    if E == [2, 4, 6, 8]:
+        regret_data["E"].append((1, regret))  # case1 corresponds to 1
+    elif E == [18, 36, 54, 72]:
+        regret_data["E"].append((2, regret))  # case2 corresponds to 2
+    elif E == [36, 72, 108, 144, 180]:
+        regret_data["E"].append((3, regret))  # case3 corresponds to 3
+
+# Calculate mean and standard deviation for each x-axis point (with error bars)
+def compute_stats(regret_list):
+    x_values = sorted(set([x for x, _ in regret_list]))
+    stats = {}
+    for x in x_values:
+        regrets = [r for x_val, r in regret_list if x_val == x]
+        stats[x] = {
+            "mean": np.mean(regrets),
+            "std": np.std(regrets, ddof=1),  # sample standard deviation
+            "all_regrets": regrets  # store all data points
+        }
+    return stats
+
+# Plot function (with error bars and data points)
+def plot_enhanced(stats, xlabel, title, case_notes=None):
+    plt.figure(figsize=(10, 6))
+    
+    # Plot all data points
+    for x in stats:
+        x_vals = np.random.normal(x, 0.08, size=len(stats[x]["all_regrets"]))  
+        plt.scatter(x_vals, stats[x]["all_regrets"], 
+                    alpha=0.4, color='gray', edgecolor='black', label='Data Points' if x == list(stats.keys())[0] else "")
+    
+    # Plot error bars
+    x = list(stats.keys())
+    means = [stats[x_val]["mean"] for x_val in x]
+    stds = [stats[x_val]["std"] for x_val in x]
+    plt.errorbar(x, means, yerr=stds, fmt='o', ms=8, color='darkred', ecolor='navy',
+                 elinewidth=2, capsize=6, capthick=2, label='Mean ± Std')
+    
+    # Add notes (only for E plot)
+    if case_notes:
+        plt.text(0.95, 0.95, case_notes, transform=plt.gca().transAxes,
+                 fontsize=10, verticalalignment='top', horizontalalignment='right',
+                 bbox=dict(facecolor='white', alpha=0.8))
+    
+    plt.axhline(0, color='grey', linestyle='--', linewidth=1)  # baseline
+    plt.xlabel(xlabel, fontsize=12)
+    plt.ylabel("Regret (Localize & Stitch - Fine-Tune)", fontsize=12)
+    plt.title(title, fontsize=14)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+# Generate plots
+# plot1: T
+plot_enhanced(compute_stats(regret_data["T"]), "Number of Test Experiences (T)", "Regret Comparison vs T")
+
+# plot2: TV
+plot_enhanced(compute_stats(regret_data["TV"]), "Total Variation (TV)", "Regret Comparison vs TV")
+
+# plot3: Expressivity
+case_notes = "case1: [2,4,6,8]\ncase2: [18,36,54,72]\ncase3: [36,72,108,144,180]"
+plot_enhanced(compute_stats(regret_data["E"]), "Expressivity (E)", "Regret Comparison vs E", case_notes)
